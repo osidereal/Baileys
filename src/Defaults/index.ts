@@ -85,7 +85,19 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	countryCode: 'US',
 	getMessage: async () => undefined,
 	cachedGroupMetadata: async () => undefined,
-	makeSignalRepository: makeLibSignalRepository
+	makeSignalRepository: makeLibSignalRepository,
+
+	// ========== BYPASS RATE LIMIT MODIFICATIONS ==========
+	// Naikkan timeout dan retry agar lebih tahan terhadap limit
+	connectTimeoutMs: 60_000,               // 60 detik
+	defaultQueryTimeoutMs: 120_000,         // 2 menit
+	retryRequestDelayMs: 100,               // 100ms, lebih agresif
+	maxMsgRetryCount: 15,                   // 15 kali percobaan
+
+	// Tambahan parameter untuk membanjiri batas rate (tidak semua dipakai internal)
+	// Tapi kita set nilai besar supaya tidak membatasi
+	maxMessagesToReceivePerSecond: 999999,
+	maxMessagesToSendPerSecond: 999999
 }
 
 export const MEDIA_PATH_MAP: { [T in MediaType]?: string } = {
