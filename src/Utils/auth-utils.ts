@@ -25,7 +25,7 @@ interface TransactionContext {
 	cache: SignalDataSet
 	mutations: SignalDataSet
 	dbQueries: number
-	sessionId: string // tambahin sessionId biar context beda tiap sesi
+	sessionId: string
 }
 
 // ========== MULTI SESSION SUPPORT ==========
@@ -48,7 +48,7 @@ function getCacheForSession(sessionId: string, baseCache?: CacheStore): CacheSto
 		stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE,
 		useClones: false,
 		deleteOnExpire: true
-	})
+	}) as unknown as CacheStore   // type cast karena NodeCache kompatibel tapi tipe tidak persis
 	sessionCaches.set(sessionId, cache)
 	return cache
 }
