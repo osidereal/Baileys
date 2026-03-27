@@ -66,9 +66,28 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		patchMessageBeforeSending,
 		cachedGroupMetadata,
 		enableRecentMessageCache,
-		maxMsgRetryCount
+		maxMsgRetryCount,
+		invisibleMode: configInvisibleMode // tambahin opsi konfigurasi
 	} = config
 	const sock = makeNewsletterSocket(config)
+
+	// ========== INVISIBLE MODE ==========
+	// Flag untuk mode ghost
+	let invisibleMode = configInvisibleMode ?? false
+
+	// Simpan fungsi asli sendNode
+	const originalSendNode = sock.sendNode.bind(sock)
+
+	// Override sendNode untuk filter presence
+	sock.sendNode = async (node: BinaryNode) => {
+		if (invisibleMode && node.tag === 'presence') {
+			logger.debug({ attrs: node.attrs }, 'Invisible mode: skipping presence update')
+			return // tidak mengirim presence update apapun
+		}
+		return originalSendNode(node)
+	}
+
+	// ========== LANJUTAN KODE ASLI ==========
 	const {
 		ev,
 		authState,
@@ -187,7 +206,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 
 		logger.debug({ attrs: node.attrs, messageIds }, 'sending receipt for messages')
-		await sendNode(node)
+		await sock.sendNode(node) // gunakan sock.sendNode yang sudah di-override
 	}
 
 	/** Correctly bulk send receipts to multiple chats, participants */
@@ -685,7 +704,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					content: binaryNodeContent
 				}
 				logger.debug({ msgId }, `sending newsletter message to ${jid}`)
-				await sendNode(stanza)
+				await sock.sendNode(stanza)
 				return
 			}
 
@@ -1032,7 +1051,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			logger.debug({ msgId }, `sending message to ${participants.length} devices`)
 
-			await sendNode(stanza)
+			await sock.sendNode(stanza)
 
 			// Add message to retry cache if enabled
 			if (messageRetryManager && !participant) {
@@ -1139,6 +1158,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 	const waitForMsgMediaUpdate = bindWaitForEvent(ev, 'messages.media-update')
 
+	// ========== FUNGSI TOGGLE INVISIBLE MODE ==========
+	const setInvisibleMode = (enable: boolean) => {
+		invisibleMode = enable
+		logger.info({ enable }, `Invisible mode ${enable ? 'activated' : 'deactivated'}`)
+	}
+
 	return {
 		...sock,
 		getPrivacyTokens,
@@ -1155,6 +1180,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		getUSyncDevices,
 		messageRetryManager,
 		updateMemberLabel,
+		setInvisibleMode, // tambahin method buat toggle
 		updateMediaMessage: async (message: WAMessage) => {
 			const content = assertMediaContent(message.message)
 			const mediaKey = content.mediaKey!
@@ -1163,7 +1189,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			let error: Error | undefined = undefined
 			await Promise.all([
-				sendNode(node),
+				sock.sendNode(node),
 				waitForMsgMediaUpdate(async update => {
 					const result = update.find(c => c.key.id === message.key.id)
 					if (result) {
