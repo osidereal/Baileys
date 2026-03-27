@@ -1096,6 +1096,41 @@ export const makeSocket = (config: SocketConfig) => {
 		}
 	}
 
+	// ========== AUTO RECONNECT (MANUAL) ==========
+	let reconnectAttempt = 0
+	let reconnectTimer: NodeJS.Timeout | null = null
+
+	const reconnect = async (delayMs: number = 3000) => {
+		if (closed) {
+			logger.info('reconnect called but already closed')
+			return
+		}
+		if (reconnectTimer) {
+			logger.info('reconnect already scheduled')
+			return
+		}
+
+		logger.info(`Scheduling reconnect in ${delayMs}ms (attempt ${reconnectAttempt + 1})`)
+
+		reconnectTimer = setTimeout(async () => {
+			reconnectTimer = null
+			reconnectAttempt++
+
+			try {
+				await end(new Boom('Manual reconnect', { statusCode: DisconnectReason.connectionClosed }))
+				closed = false
+				ev.emit('connection.update', {
+					connection: 'reconnecting',
+					reconnectAttempt: reconnectAttempt
+				})
+			} catch (err) {
+				logger.error({ err }, 'reconnect attempt failed')
+				const nextDelay = Math.min(30000, delayMs * 2)
+				reconnect(nextDelay)
+			}
+		}, delayMs)
+	}
+
 	return {
 		type: 'md' as 'md',
 		ws,
@@ -1122,11 +1157,11 @@ export const makeSocket = (config: SocketConfig) => {
 		updateServerTimeOffset,
 		sendUnifiedSession,
 		wamBuffer: publicWAMBuffer,
-		/** Waits for the connection to WA to reach a state */
 		waitForConnectionUpdate: bindWaitForConnectionUpdate(ev),
 		sendWAMBuffer,
 		executeUSyncQuery,
-		onWhatsApp
+		onWhatsApp,
+		reconnect  // <-- fungsi reconnect ditambahkan
 	}
 }
 
