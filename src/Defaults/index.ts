@@ -55,14 +55,14 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	version: version as WAVersion,
 	browser: Browsers.macOS('Chrome'),
 	waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
-	connectTimeoutMs: 60_000, // diubah dari 20_000
+	connectTimeoutMs: 20_000,
 	keepAliveIntervalMs: 30_000,
 	logger: logger.child({ class: 'baileys' }),
 	emitOwnEvents: true,
-	defaultQueryTimeoutMs: 120_000, // diubah dari 60_000
+	defaultQueryTimeoutMs: 60_000,
 	customUploadHosts: [],
-	retryRequestDelayMs: 100, // diubah dari 250
-	maxMsgRetryCount: 15, // diubah dari 5
+	retryRequestDelayMs: 250,
+	maxMsgRetryCount: 5,
 	fireInitQueries: true,
 	auth: undefined as unknown as AuthenticationState,
 	markOnlineOnConnect: true,
