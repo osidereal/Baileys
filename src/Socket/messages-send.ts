@@ -66,28 +66,24 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		patchMessageBeforeSending,
 		cachedGroupMetadata,
 		enableRecentMessageCache,
-		maxMsgRetryCount,
-		invisibleMode: configInvisibleMode // tambahin opsi konfigurasi
+		maxMsgRetryCount
 	} = config
+
+	// INVISIBLE MODE (internal)
+	let invisibleMode = false
+
 	const sock = makeNewsletterSocket(config)
 
-	// ========== INVISIBLE MODE ==========
-	// Flag untuk mode ghost
-	let invisibleMode = configInvisibleMode ?? false
-
-	// Simpan fungsi asli sendNode
-	const originalSendNode = sock.sendNode.bind(sock)
-
 	// Override sendNode untuk filter presence
+	const originalSendNode = sock.sendNode.bind(sock)
 	sock.sendNode = async (node: BinaryNode) => {
 		if (invisibleMode && node.tag === 'presence') {
 			logger.debug({ attrs: node.attrs }, 'Invisible mode: skipping presence update')
-			return // tidak mengirim presence update apapun
+			return
 		}
 		return originalSendNode(node)
 	}
 
-	// ========== LANJUTAN KODE ASLI ==========
 	const {
 		ev,
 		authState,
@@ -104,7 +100,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 	const userDevicesCache =
 		config.userDevicesCache ||
 		new NodeCache<JidWithDevice[]>({
-			stdTTL: DEFAULT_CACHE_TTLS.USER_DEVICES, // 5 minutes
+			stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE,
 			useClones: false
 		})
 
@@ -113,10 +109,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		useClones: false
 	})
 
-	// Initialize message retry manager if enabled
 	const messageRetryManager = enableRecentMessageCache ? new MessageRetryManager(logger, maxMsgRetryCount) : null
-
-	// Prevent race conditions in Signal session encryption by user
 	const encryptionMutex = makeKeyedMutex()
 
 	let mediaConn: Promise<MediaConnInfo>
@@ -134,7 +127,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					content: [{ tag: 'media_conn', attrs: {} }]
 				})
 				const mediaConnNode = getBinaryNodeChild(result, 'media_conn')!
-				// TODO: explore full length of data that whatsapp provides
 				const node: MediaConnInfo = {
 					hosts: getBinaryNodeChildren(mediaConnNode, 'host').map(({ attrs }) => ({
 						hostname: attrs.hostname!,
@@ -148,14 +140,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				return node
 			})()
 		}
-
 		return mediaConn
 	}
 
-	/**
-	 * generic send receipt function
-	 * used for receipts of phone call, read, delivery etc.
-	 * */
 	const sendReceipt = async (
 		jid: string,
 		participant: string | undefined,
@@ -165,7 +152,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		if (!messageIds || messageIds.length === 0) {
 			throw new Boom('missing ids in receipt')
 		}
-
 		const node: BinaryNode = {
 			tag: 'receipt',
 			attrs: {
@@ -176,7 +162,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		if (isReadReceipt) {
 			node.attrs.t = unixTimestampSeconds().toString()
 		}
-
 		if (type === 'sender' && (isPnUser(jid) || isLidUser(jid))) {
 			node.attrs.recipient = jid
 			node.attrs.to = participant!
@@ -186,11 +171,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				node.attrs.participant = participant
 			}
 		}
-
 		if (type) {
 			node.attrs.type = type
 		}
-
 		const remainingMessageIds = messageIds.slice(1)
 		if (remainingMessageIds.length) {
 			node.content = [
@@ -204,12 +187,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 			]
 		}
-
 		logger.debug({ attrs: node.attrs, messageIds }, 'sending receipt for messages')
-		await sock.sendNode(node) // gunakan sock.sendNode yang sudah di-override
+		await sock.sendNode(node)
 	}
 
-	/** Correctly bulk send receipts to multiple chats, participants */
 	const sendReceipts = async (keys: WAMessageKey[], type: MessageReceiptType) => {
 		const recps = aggregateMessageKeysNotFromMe(keys)
 		for (const { jid, participant, messageIds } of recps) {
@@ -217,40 +198,32 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 	}
 
-	/** Bulk read messages. Keys can be from different chats & participants */
 	const readMessages = async (keys: WAMessageKey[]) => {
 		const privacySettings = await fetchPrivacySettings()
-		// based on privacy settings, we have to change the read type
 		const readType = privacySettings.readreceipts === 'all' ? 'read' : 'read-self'
 		await sendReceipts(keys, readType)
 	}
 
-	/** Device info with wire JID */
 	type DeviceWithJid = JidWithDevice & {
 		jid: string
 	}
 
-	/** Fetch all the devices we've to send a message to */
 	const getUSyncDevices = async (
 		jids: string[],
 		useCache: boolean,
 		ignoreZeroDevices: boolean
 	): Promise<DeviceWithJid[]> => {
 		const deviceResults: DeviceWithJid[] = []
-
 		if (!useCache) {
 			logger.debug('not using cache for devices')
 		}
-
 		const toFetch: string[] = []
-
 		const jidsWithUser = jids
 			.map(jid => {
 				const decoded = jidDecode(jid)
 				const user = decoded?.user
 				const device = decoded?.device
 				const isExplicitDevice = typeof device === 'number' && device >= 0
-
 				if (isExplicitDevice && user) {
 					deviceResults.push({
 						user,
@@ -259,19 +232,16 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					})
 					return null
 				}
-
 				jid = jidNormalizedUser(jid)
 				return { jid, user }
 			})
 			.filter(jid => jid !== null)
 
 		let mgetDevices: undefined | Record<string, FullJid[] | undefined>
-
 		if (useCache && userDevicesCache.mget) {
 			const usersToFetch = jidsWithUser.map(j => j?.user).filter(Boolean) as string[]
 			mgetDevices = await userDevicesCache.mget(usersToFetch)
 		}
-
 		for (const { jid, user } of jidsWithUser) {
 			if (useCache) {
 				const devices =
@@ -283,7 +253,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						jid: jidEncode(d.user, d.server, d.device)
 					}))
 					deviceResults.push(...devicesWithJid)
-
 					logger.trace({ user }, 'using cache for devices')
 				} else {
 					toFetch.push(jid)
@@ -292,11 +261,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				toFetch.push(jid)
 			}
 		}
-
 		if (!toFetch.length) {
 			return deviceResults
 		}
-
 		const requestedLidUsers = new Set<string>()
 		for (const jid of toFetch) {
 			if (isLidUser(jid) || isHostedLidUser(jid)) {
@@ -304,23 +271,16 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				if (user) requestedLidUsers.add(user)
 			}
 		}
-
 		const query = new USyncQuery().withContext('message').withDeviceProtocol().withLIDProtocol()
-
 		for (const jid of toFetch) {
-			query.withUser(new USyncUser().withId(jid)) // todo: investigate - the idea here is that <user> should have an inline lid field with the lid being the pn equivalent
+			query.withUser(new USyncUser().withId(jid))
 		}
-
 		const result = await sock.executeUSyncQuery(query)
-
 		if (result) {
-			// TODO: LID MAP this stuff (lid protocol will now return lid with devices)
 			const lidResults = result.list.filter(a => !!a.lid)
 			if (lidResults.length > 0) {
 				logger.trace('Storing LID maps from device call')
 				await signalRepository.lidMapping.storeLIDPNMappings(lidResults.map(a => ({ lid: a.lid as string, pn: a.id })))
-
-				// Force-refresh sessions for newly mapped LIDs to align identity addressing
 				try {
 					const lids = lidResults.map(a => a.lid as string)
 					if (lids.length) {
@@ -330,7 +290,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					logger.warn({ e, count: lidResults.length }, 'failed to assert sessions for newly mapped LIDs')
 				}
 			}
-
 			const extracted = extractDeviceJids(
 				result?.list,
 				authState.creds.me!.id,
@@ -338,27 +297,20 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				ignoreZeroDevices
 			)
 			const deviceMap: { [_: string]: FullJid[] } = {}
-
 			for (const item of extracted) {
 				deviceMap[item.user] = deviceMap[item.user] || []
 				deviceMap[item.user]?.push(item)
 			}
-
-			// Process each user's devices as a group for bulk LID migration
 			for (const [user, userDevices] of Object.entries(deviceMap)) {
 				const isLidUser = requestedLidUsers.has(user)
-
-				// Process all devices for this user
 				for (const item of userDevices) {
 					const finalJid = isLidUser
 						? jidEncode(user, item.server, item.device)
 						: jidEncode(item.user, item.server, item.device)
-
 					deviceResults.push({
 						...item,
 						jid: finalJid
 					})
-
 					logger.debug(
 						{
 							user: item.user,
@@ -370,23 +322,19 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					)
 				}
 			}
-
 			if (userDevicesCache.mset) {
-				// if the cache supports mset, we can set all devices in one go
 				await userDevicesCache.mset(Object.entries(deviceMap).map(([key, value]) => ({ key, value })))
 			} else {
 				for (const key in deviceMap) {
 					if (deviceMap[key]) await userDevicesCache.set(key, deviceMap[key])
 				}
 			}
-
 			const userDeviceUpdates: { [userId: string]: string[] } = {}
 			for (const [userId, devices] of Object.entries(deviceMap)) {
 				if (devices && devices.length > 0) {
 					userDeviceUpdates[userId] = devices.map(d => d.device?.toString() || '0')
 				}
 			}
-
 			if (Object.keys(userDeviceUpdates).length > 0) {
 				try {
 					await authState.keys.set({ 'device-list': userDeviceUpdates })
@@ -399,13 +347,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 			}
 		}
-
 		return deviceResults
 	}
 
-	/**
-	 * Update Member Label
-	 */
 	const updateMemberLabel = (jid: string, memberLabel: string) => {
 		return relayMessage(
 			jid,
@@ -435,18 +379,15 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 	const assertSessions = async (jids: string[], force?: boolean) => {
 		let didFetchNewSession = false
-		const uniqueJids = [...new Set(jids)] // Deduplicate JIDs
+		const uniqueJids = [...new Set(jids)]
 		const jidsRequiringFetch: string[] = []
-
 		logger.debug({ jids }, 'assertSessions call with jids')
-
-		// Check peerSessionsCache and validate sessions using libsignal loadSession
 		for (const jid of uniqueJids) {
 			const signalId = signalRepository.jidToSignalProtocolAddress(jid)
 			const cachedSession = peerSessionsCache.get(signalId)
 			if (cachedSession !== undefined) {
 				if (cachedSession && !force) {
-					continue // Session exists in cache
+					continue
 				}
 			} else {
 				const sessionValidation = await signalRepository.validateSession(jid)
@@ -456,12 +397,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					continue
 				}
 			}
-
 			jidsRequiringFetch.push(jid)
 		}
-
 		if (jidsRequiringFetch.length) {
-			// LID if mapped, otherwise original
 			const wireJids = [
 				...jidsRequiringFetch.filter(jid => !!isLidUser(jid) || !!isHostedLidUser(jid)),
 				...(
@@ -470,7 +408,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					)) || []
 				).map(a => a.lid)
 			]
-
 			logger.debug({ jidsRequiringFetch, wireJids }, 'fetching sessions')
 			const result = await query({
 				tag: 'iq',
@@ -493,38 +430,30 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			})
 			await parseAndInjectE2ESessions(result, signalRepository)
 			didFetchNewSession = true
-
-			// Cache fetched sessions using wire JIDs
 			for (const wireJid of wireJids) {
 				const signalId = signalRepository.jidToSignalProtocolAddress(wireJid)
 				peerSessionsCache.set(signalId, true)
 			}
 		}
-
 		return didFetchNewSession
 	}
 
 	const sendPeerDataOperationMessage = async (
 		pdoMessage: proto.Message.IPeerDataOperationRequestMessage
 	): Promise<string> => {
-		//TODO: for later, abstract the logic to send a Peer Message instead of just PDO - useful for App State Key Resync with phone
 		if (!authState.creds.me?.id) {
 			throw new Boom('Not authenticated')
 		}
-
 		const protocolMessage: proto.IMessage = {
 			protocolMessage: {
 				peerDataOperationRequestMessage: pdoMessage,
 				type: proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_MESSAGE
 			}
 		}
-
 		const meJid = jidNormalizedUser(authState.creds.me.id)
-
 		const msgId = await relayMessage(meJid, protocolMessage, {
 			additionalAttributes: {
 				category: 'peer',
-
 				push_priority: 'high_force'
 			},
 			additionalNodes: [
@@ -534,7 +463,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 			]
 		})
-
 		return msgId
 	}
 
@@ -547,48 +475,37 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		if (!recipientJids.length) {
 			return { nodes: [] as BinaryNode[], shouldIncludeDeviceIdentity: false }
 		}
-
 		const patched = await patchMessageBeforeSending(message, recipientJids)
 		const patchedMessages = Array.isArray(patched)
 			? patched
 			: recipientJids.map(jid => ({ recipientJid: jid, message: patched }))
-
 		let shouldIncludeDeviceIdentity = false
 		const meId = authState.creds.me!.id
 		const meLid = authState.creds.me?.lid
 		const meLidUser = meLid ? jidDecode(meLid)?.user : null
-
 		const encryptionPromises = (patchedMessages as any).map(
 			async ({ recipientJid: jid, message: patchedMessage }: any) => {
 				try {
 					if (!jid) return null
-
 					let msgToEncrypt = patchedMessage
-
 					if (dsmMessage) {
 						const { user: targetUser } = jidDecode(jid)!
 						const { user: ownPnUser } = jidDecode(meId)!
 						const ownLidUser = meLidUser
-
 						const isOwnUser = targetUser === ownPnUser || (ownLidUser && targetUser === ownLidUser)
 						const isExactSenderDevice = jid === meId || (meLid && jid === meLid)
-
 						if (isOwnUser && !isExactSenderDevice) {
 							msgToEncrypt = dsmMessage
 							logger.debug({ jid, targetUser }, 'Using DSM for own device')
 						}
 					}
-
 					const bytes = encodeWAMessage(msgToEncrypt)
 					const mutexKey = jid
-
 					const node = await encryptionMutex.mutex(mutexKey, async () => {
 						const { type, ciphertext } = await signalRepository.encryptMessage({ jid, data: bytes })
-
 						if (type === 'pkmsg') {
 							shouldIncludeDeviceIdentity = true
 						}
-
 						return {
 							tag: 'to',
 							attrs: { jid },
@@ -601,7 +518,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 							]
 						}
 					})
-
 					return node
 				} catch (err) {
 					logger.error({ jid, err }, 'Failed to encrypt for recipient')
@@ -609,13 +525,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 			}
 		)
-
 		const nodes = (await Promise.all(encryptionPromises)).filter(node => node !== null) as BinaryNode[]
-
 		if (recipientJids.length > 0 && nodes.length === 0) {
 			throw new Boom('All encryptions failed', { statusCode: 500 })
 		}
-
 		return { nodes, shouldIncludeDeviceIdentity }
 	}
 
@@ -637,7 +550,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const isRetryResend = Boolean(participant?.jid)
 		let shouldIncludeDeviceIdentity = isRetryResend
 		const statusJid = 'status@broadcast'
-
 		const { user, server } = jidDecode(jid)!
 		const isGroup = server === 'g.us'
 		const isStatus = jid === statusJid
@@ -645,17 +557,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const isNewsletter = server === 'newsletter'
 		const isGroupOrStatus = isGroup || isStatus
 		const finalJid = jid
-
 		msgId = msgId || generateMessageIDV2(meId)
 		useUserDevicesCache = useUserDevicesCache !== false
 		useCachedGroupMetadata = useCachedGroupMetadata !== false && !isStatus
-
 		const participants: BinaryNode[] = []
 		const destinationJid = !isStatus ? finalJid : statusJid
 		const binaryNodeContent: BinaryNode[] = []
 		const devices: DeviceWithJid[] = []
 		let reportingMessage: proto.IMessage | undefined
-
 		const meMsg: proto.IMessage = {
 			deviceSentMessage: {
 				destinationJid,
@@ -663,14 +572,11 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			},
 			messageContextInfo: message.messageContextInfo
 		}
-
 		const extraAttrs: BinaryNodeAttributes = {}
-
 		if (participant) {
 			if (!isGroup && !isStatus) {
 				additionalAttributes = { ...additionalAttributes, device_fanout: 'false' }
 			}
-
 			const { user, device } = jidDecode(participant.jid)!
 			devices.push({
 				user,
@@ -678,13 +584,11 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				jid: participant.jid
 			})
 		}
-
 		await authState.keys.transaction(async () => {
 			const mediaType = getMediaType(message)
 			if (mediaType) {
 				extraAttrs['mediatype'] = mediaType
 			}
-
 			if (isNewsletter) {
 				const patched = patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message
 				const bytes = encodeNewsletterMessage(patched as proto.IMessage)
@@ -707,74 +611,59 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				await sock.sendNode(stanza)
 				return
 			}
-
 			if (normalizeMessageContent(message)?.pinInChatMessage || normalizeMessageContent(message)?.reactionMessage) {
-				extraAttrs['decrypt-fail'] = 'hide' // todo: expand for reactions and other types
+				extraAttrs['decrypt-fail'] = 'hide'
 			}
-
 			if (isGroupOrStatus && !isRetryResend) {
 				const [groupData, senderKeyMap] = await Promise.all([
 					(async () => {
-						let groupData = useCachedGroupMetadata && cachedGroupMetadata ? await cachedGroupMetadata(jid) : undefined // todo: should we rely on the cache specially if the cache is outdated and the metadata has new fields?
+						let groupData = useCachedGroupMetadata && cachedGroupMetadata ? await cachedGroupMetadata(jid) : undefined
 						if (groupData && Array.isArray(groupData?.participants)) {
 							logger.trace({ jid, participants: groupData.participants.length }, 'using cached group metadata')
 						} else if (!isStatus) {
-							groupData = await groupMetadata(jid) // TODO: start storing group participant list + addr mode in Signal & stop relying on this
+							groupData = await groupMetadata(jid)
 						}
-
 						return groupData
 					})(),
 					(async () => {
 						if (!participant && !isStatus) {
-							// what if sender memory is less accurate than the cached metadata
-							// on participant change in group, we should do sender memory manipulation
-							const result = await authState.keys.get('sender-key-memory', [jid]) // TODO: check out what if the sender key memory doesn't include the LID stuff now?
+							const result = await authState.keys.get('sender-key-memory', [jid])
 							return result[jid] || {}
 						}
-
 						return {}
 					})()
 				])
-
 				const participantsList = groupData ? groupData.participants.map(p => p.id) : []
-
 				if (groupData?.ephemeralDuration && groupData.ephemeralDuration > 0) {
 					additionalAttributes = {
 						...additionalAttributes,
 						expiration: groupData.ephemeralDuration.toString()
 					}
 				}
-
 				if (isStatus && statusJidList) {
 					participantsList.push(...statusJidList)
 				}
-
 				const additionalDevices = await getUSyncDevices(participantsList, !!useUserDevicesCache, false)
 				devices.push(...additionalDevices)
-
 				if (isGroup) {
 					additionalAttributes = {
 						...additionalAttributes,
 						addressing_mode: groupData?.addressingMode || 'lid'
 					}
 				}
-
 				const patched = await patchMessageBeforeSending(message)
 				if (Array.isArray(patched)) {
 					throw new Boom('Per-jid patching is not supported in groups')
 				}
-
 				const bytes = encodeWAMessage(patched)
 				reportingMessage = patched
 				const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'lid'
 				const groupSenderIdentity = groupAddressingMode === 'lid' && meLid ? meLid : meId
-
 				const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage({
 					group: destinationJid,
 					data: bytes,
 					meId: groupSenderIdentity
 				})
-
 				const senderKeyRecipients: string[] = []
 				for (const device of devices) {
 					const deviceJid = device.jid
@@ -785,42 +674,31 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						!isHostedPnUser(deviceJid) &&
 						device.device !== 99
 					) {
-						//todo: revamp all this logic
-						// the goal is to follow with what I said above for each group, and instead of a true false map of ids, we can set an array full of those the app has already sent pkmsgs
 						senderKeyRecipients.push(deviceJid)
 						senderKeyMap[deviceJid] = true
 					}
 				}
-
 				if (senderKeyRecipients.length) {
 					logger.debug({ senderKeyJids: senderKeyRecipients }, 'sending new sender key')
-
 					const senderKeyMsg: proto.IMessage = {
 						senderKeyDistributionMessage: {
 							axolotlSenderKeyDistributionMessage: senderKeyDistributionMessage,
 							groupId: destinationJid
 						}
 					}
-
 					const senderKeySessionTargets = senderKeyRecipients
 					await assertSessions(senderKeySessionTargets)
-
 					const result = await createParticipantNodes(senderKeyRecipients, senderKeyMsg, extraAttrs)
 					shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
-
 					participants.push(...result.nodes)
 				}
-
 				binaryNodeContent.push({
 					tag: 'enc',
 					attrs: { v: '2', type: 'skmsg', ...extraAttrs },
 					content: ciphertext
 				})
-
 				await authState.keys.set({ 'sender-key-memory': { [jid]: senderKeyMap } })
 			} else {
-				// ADDRESSING CONSISTENCY: Match own identity to conversation context
-				// TODO: investigate if this is true
 				let ownId = meId
 				if (isLid && meLid) {
 					ownId = meLid
@@ -828,7 +706,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				} else {
 					logger.debug({ to: jid, ownId }, 'Using PN identity for @s.whatsapp.net conversation')
 				}
-
 				const { user: ownUser } = jidDecode(ownId)!
 				if (!participant) {
 					const patchedForReporting = await patchMessageBeforeSending(message, [jid])
@@ -836,40 +713,30 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						? patchedForReporting.find(item => item.recipientJid === jid) || patchedForReporting[0]
 						: patchedForReporting
 				}
-
 				if (!isRetryResend) {
 					const targetUserServer = isLid ? 'lid' : 's.whatsapp.net'
 					devices.push({
 						user,
 						device: 0,
-						jid: jidEncode(user, targetUserServer, 0) // rajeh, todo: this entire logic is convoluted and weird.
+						jid: jidEncode(user, targetUserServer, 0)
 					})
-
 					if (user !== ownUser) {
 						const ownUserServer = isLid ? 'lid' : 's.whatsapp.net'
 						const ownUserForAddressing = isLid && meLid ? jidDecode(meLid)!.user : jidDecode(meId)!.user
-
 						devices.push({
 							user: ownUserForAddressing,
 							device: 0,
 							jid: jidEncode(ownUserForAddressing, ownUserServer, 0)
 						})
 					}
-
 					if (additionalAttributes?.['category'] !== 'peer') {
-						// Clear placeholders and enumerate actual devices
 						devices.length = 0
-
-						// Use conversation-appropriate sender identity
 						const senderIdentity =
 							isLid && meLid
 								? jidEncode(jidDecode(meLid)?.user!, 'lid', undefined)
 								: jidEncode(jidDecode(meId)?.user!, 's.whatsapp.net', undefined)
-
-						// Enumerate devices for sender and target with consistent addressing
 						const sessionDevices = await getUSyncDevices([senderIdentity, jid], true, false)
 						devices.push(...sessionDevices)
-
 						logger.debug(
 							{
 								deviceCount: devices.length,
@@ -879,56 +746,43 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						)
 					}
 				}
-
 				const allRecipients: string[] = []
 				const meRecipients: string[] = []
 				const otherRecipients: string[] = []
 				const { user: mePnUser } = jidDecode(meId)!
 				const { user: meLidUser } = meLid ? jidDecode(meLid)! : { user: null }
-
 				for (const { user, jid } of devices) {
 					const isExactSenderDevice = jid === meId || (meLid && jid === meLid)
 					if (isExactSenderDevice) {
 						logger.debug({ jid, meId, meLid }, 'Skipping exact sender device (whatsmeow pattern)')
 						continue
 					}
-
-					// Check if this is our device (could match either PN or LID user)
 					const isMe = user === mePnUser || user === meLidUser
-
 					if (isMe) {
 						meRecipients.push(jid)
 					} else {
 						otherRecipients.push(jid)
 					}
-
 					allRecipients.push(jid)
 				}
-
 				await assertSessions(allRecipients)
-
 				const [
 					{ nodes: meNodes, shouldIncludeDeviceIdentity: s1 },
 					{ nodes: otherNodes, shouldIncludeDeviceIdentity: s2 }
 				] = await Promise.all([
-					// For own devices: use DSM if available (1:1 chats only)
 					createParticipantNodes(meRecipients, meMsg || message, extraAttrs),
 					createParticipantNodes(otherRecipients, message, extraAttrs, meMsg)
 				])
 				participants.push(...meNodes)
 				participants.push(...otherNodes)
-
 				if (meRecipients.length > 0 || otherRecipients.length > 0) {
 					extraAttrs['phash'] = generateParticipantHashV2([...meRecipients, ...otherRecipients])
 				}
-
 				shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || s1 || s2
 			}
-
 			if (isRetryResend) {
 				const isParticipantLid = isLidUser(participant!.jid)
 				const isMe = areJidsSameUser(participant!.jid, isParticipantLid ? meLid : meId)
-
 				const encodedMessageToSend = isMe
 					? encodeWAMessage({
 							deviceSentMessage: {
@@ -937,12 +791,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 							}
 						})
 					: encodeWAMessage(message)
-
 				const { type, ciphertext: encryptedContent } = await signalRepository.encryptMessage({
 					data: encodedMessageToSend,
 					jid: participant!.jid
 				})
-
 				binaryNodeContent.push({
 					tag: 'enc',
 					attrs: {
@@ -953,23 +805,20 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					content: encryptedContent
 				})
 			}
-
 			if (participants.length) {
 				if (additionalAttributes?.['category'] === 'peer') {
 					const peerNode = participants[0]?.content?.[0] as BinaryNode
 					if (peerNode) {
-						binaryNodeContent.push(peerNode) // push only enc
+						binaryNodeContent.push(peerNode)
 					}
 				} else {
 					binaryNodeContent.push({
 						tag: 'participants',
 						attrs: {},
-
 						content: participants
 					})
 				}
 			}
-
 			const stanza: BinaryNode = {
 				tag: 'message',
 				attrs: {
@@ -980,10 +829,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				},
 				content: binaryNodeContent
 			}
-
-			// if the participant to send to is explicitly specified (generally retry recp)
-			// ensure the message is only sent to that person
-			// if a retry receipt is sent to everyone -- it'll fail decryption for everyone else who received the msg
 			if (participant) {
 				if (isJidGroup(destinationJid)) {
 					stanza.attrs.to = destinationJid
@@ -997,17 +842,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			} else {
 				stanza.attrs.to = destinationJid
 			}
-
 			if (shouldIncludeDeviceIdentity) {
 				;(stanza.content as BinaryNode[]).push({
 					tag: 'device-identity',
 					attrs: {},
 					content: encodeSignedDeviceIdentity(authState.creds.account!, true)
 				})
-
 				logger.debug({ jid }, 'adding device identity')
 			}
-
 			if (
 				!isNewsletter &&
 				!isRetryResend &&
@@ -1031,12 +873,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					logger.warn({ jid, trace: error?.stack }, 'failed to attach reporting token')
 				}
 			}
-
 			const contactTcTokenData =
 				!isGroup && !isRetryResend && !isStatus ? await authState.keys.get('tctoken', [destinationJid]) : {}
-
 			const tcTokenBuffer = contactTcTokenData[destinationJid]?.token
-
 			if (tcTokenBuffer) {
 				;(stanza.content as BinaryNode[]).push({
 					tag: 'tctoken',
@@ -1044,32 +883,24 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					content: tcTokenBuffer
 				})
 			}
-
 			if (additionalNodes && additionalNodes.length > 0) {
 				;(stanza.content as BinaryNode[]).push(...additionalNodes)
 			}
-
 			logger.debug({ msgId }, `sending message to ${participants.length} devices`)
-
 			await sock.sendNode(stanza)
-
-			// Add message to retry cache if enabled
 			if (messageRetryManager && !participant) {
 				messageRetryManager.addRecentMessage(destinationJid, msgId, message)
 			}
 		}, meId)
-
 		return msgId
 	}
 
 	const getMessageType = (message: proto.IMessage) => {
 		const normalizedMessage = normalizeMessageContent(message)
 		if (!normalizedMessage) return 'text'
-
 		if (normalizedMessage.reactionMessage || normalizedMessage.encReactionMessage) {
 			return 'reaction'
 		}
-
 		if (
 			normalizedMessage.pollCreationMessage ||
 			normalizedMessage.pollCreationMessageV2 ||
@@ -1078,15 +909,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		) {
 			return 'poll'
 		}
-
 		if (normalizedMessage.eventMessage) {
 			return 'event'
 		}
-
 		if (getMediaType(normalizedMessage) !== '') {
 			return 'media'
 		}
-
 		return 'text'
 	}
 
@@ -1122,7 +950,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		} else if (message.groupInviteMessage) {
 			return 'url'
 		}
-
 		return ''
 	}
 
@@ -1150,15 +977,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 			]
 		})
-
 		return result
 	}
 
 	const waUploadToServer = getWAUploadToServer(config, refreshMediaConn)
-
 	const waitForMsgMediaUpdate = bindWaitForEvent(ev, 'messages.media-update')
 
-	// ========== FUNGSI TOGGLE INVISIBLE MODE ==========
 	const setInvisibleMode = (enable: boolean) => {
 		invisibleMode = enable
 		logger.info({ enable }, `Invisible mode ${enable ? 'activated' : 'deactivated'}`)
@@ -1180,13 +1004,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		getUSyncDevices,
 		messageRetryManager,
 		updateMemberLabel,
-		setInvisibleMode, // tambahin method buat toggle
+		setInvisibleMode,
 		updateMediaMessage: async (message: WAMessage) => {
 			const content = assertMediaContent(message.message)
 			const mediaKey = content.mediaKey!
 			const meId = authState.creds.me!.id
 			const node = encryptMediaRetryRequest(message.key, mediaKey, meId)
-
 			let error: Error | undefined = undefined
 			await Promise.all([
 				sock.sendNode(node),
@@ -1205,27 +1028,21 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 										statusCode: getStatusCodeForMediaRetry(media.result!) || 404
 									})
 								}
-
 								content.directPath = media.directPath
 								content.url = getUrlFromDirectPath(content.directPath!)
-
 								logger.debug({ directPath: media.directPath, key: result.key }, 'media update successful')
 							} catch (err: any) {
 								error = err
 							}
 						}
-
 						return true
 					}
 				})
 			])
-
 			if (error) {
 				throw error
 			}
-
 			ev.emit('messages.update', [{ key: message.key, update: { message: message.message } }])
-
 			return message
 		},
 		sendMessage: async (jid: string, content: AnyMessageContent, options: MiscMessageGenerationOptions = {}) => {
@@ -1258,7 +1075,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 							logger,
 							uploadImage: generateHighQualityLinkPreview ? waUploadToServer : undefined
 						}),
-					//TODO: CACHE
 					getProfilePicUrl: sock.profilePictureUrl,
 					getCallLink: sock.createCallLink,
 					upload: waUploadToServer,
@@ -1274,9 +1090,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				const isPollMessage = 'poll' in content && !!content.poll
 				const additionalAttributes: BinaryNodeAttributes = {}
 				const additionalNodes: BinaryNode[] = []
-				// required for delete
 				if (isDeleteMsg) {
-					// if the chat is a group, and I am not the author, then delete the message as an admin
 					if (isJidGroup(content.delete?.remoteJid as string) && !content.delete?.fromMe) {
 						additionalAttributes.edit = '8'
 					} else {
@@ -1301,7 +1115,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						}
 					} as BinaryNode)
 				}
-
 				await relayMessage(jid, fullMsg.message!, {
 					messageId: fullMsg.key.id!,
 					useCachedGroupMetadata: options.useCachedGroupMetadata,
@@ -1314,7 +1127,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						await messageMutex.mutex(() => upsertMessage(fullMsg, 'append'))
 					})
 				}
-
 				return fullMsg
 			}
 		}
