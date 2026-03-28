@@ -1120,7 +1120,7 @@ export const makeSocket = (config: SocketConfig) => {
 				await end(new Boom('Manual reconnect', { statusCode: DisconnectReason.connectionClosed }))
 				closed = false
 				ev.emit('connection.update', {
-					connection: 'reconnecting',
+					connection: 'connecting',
 					reconnectAttempt: reconnectAttempt
 				})
 			} catch (err) {
