@@ -69,7 +69,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		maxMsgRetryCount
 	} = config
 
-	// Invisible mode flag
+	// --- INVISIBLE MODE (internal flag) ---
 	let invisibleMode = false
 
 	const sock = makeNewsletterSocket(config)
@@ -84,7 +84,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		return originalSendNode(node)
 	}
 
-	// Destructure after overriding so that sendNode is the filtered version
 	const {
 		ev,
 		authState,
