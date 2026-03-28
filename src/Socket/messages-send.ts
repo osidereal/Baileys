@@ -69,12 +69,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		maxMsgRetryCount
 	} = config
 
-	// INVISIBLE MODE (internal)
+	// Invisible mode flag
 	let invisibleMode = false
 
 	const sock = makeNewsletterSocket(config)
 
-	// Override sendNode untuk filter presence
+	// Override sendNode to block presence updates when invisible
 	const originalSendNode = sock.sendNode.bind(sock)
 	sock.sendNode = async (node: BinaryNode) => {
 		if (invisibleMode && node.tag === 'presence') {
@@ -84,6 +84,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		return originalSendNode(node)
 	}
 
+	// Destructure after overriding so that sendNode is the filtered version
 	const {
 		ev,
 		authState,
