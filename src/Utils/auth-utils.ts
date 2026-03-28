@@ -32,18 +32,17 @@ const sessionTxMutexes = new Map<string, Map<string, Mutex>>()
 const sessionTxMutexRefCounts = new Map<string, Map<string, number>>()
 
 function getCacheForSession(sessionId: string, baseCache?: CacheStore): CacheStore {
-	if (sessionCaches.has(sessionId)) {
-		return sessionCaches.get(sessionId)!
-	}
-	const cache = baseCache || new NodeCache({
-		stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE,
-		useClones: false,
-		deleteOnExpire: true
-	}) as unknown as CacheStore
-	sessionCaches.set(sessionId, cache)
-	return cache
+    if (sessionCaches.has(sessionId)) {
+        return sessionCaches.get(sessionId)!
+    }
+    const cache = (baseCache || new NodeCache({
+        stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE,
+        useClones: false,
+        deleteOnExpire: true
+    })) as unknown as CacheStore
+    sessionCaches.set(sessionId, cache)
+    return cache
 }
-
 function getQueueForSession(sessionId: string, key: string): PQueue {
 	if (!sessionKeyQueues.has(sessionId)) {
 		sessionKeyQueues.set(sessionId, new Map())
