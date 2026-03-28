@@ -21,13 +21,18 @@ export const WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX = Buffer.from([6, 5])
 export const WA_ADV_HOSTED_DEVICE_SIG_PREFIX = Buffer.from([6, 6])
 
 export const WA_DEFAULT_EPHEMERAL = 7 * 24 * 60 * 60
+
+/** Status messages older than 24 hours are considered expired */
 export const STATUS_EXPIRY_SECONDS = 24 * 60 * 60
+
+/** WA Web enforces a 14-day maximum age for placeholder resend requests */
 export const PLACEHOLDER_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 
 export const NOISE_MODE = 'Noise_XX_25519_AESGCM_SHA256\0\0\0\0'
 export const DICT_VERSION = 3
 export const KEY_BUNDLE_TYPE = Buffer.from([5])
-export const NOISE_WA_HEADER = Buffer.from([87, 65, 6, DICT_VERSION])
+export const NOISE_WA_HEADER = Buffer.from([87, 65, 6, DICT_VERSION]) // last is "DICT_VERSION"
+/** from: https://stackoverflow.com/questions/3809401/what-is-a-good-regular-expression-to-match-a-url */
 export const URL_REGEX = /https:\/\/(?![^:@\/\s]+:[^:@\/\s]+@)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(:\d+)?(\/[^\s]*)?/g
 
 export const WA_CERT_DETAILS = {
@@ -50,14 +55,14 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	version: version as WAVersion,
 	browser: Browsers.macOS('Chrome'),
 	waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
-	connectTimeoutMs: 60_000,
+	connectTimeoutMs: 60_000, // diubah dari 20_000
 	keepAliveIntervalMs: 30_000,
 	logger: logger.child({ class: 'baileys' }),
 	emitOwnEvents: true,
-	defaultQueryTimeoutMs: 120_000,
+	defaultQueryTimeoutMs: 120_000, // diubah dari 60_000
 	customUploadHosts: [],
-	retryRequestDelayMs: 100,
-	maxMsgRetryCount: 15,
+	retryRequestDelayMs: 100, // diubah dari 250
+	maxMsgRetryCount: 15, // diubah dari 5
 	fireInitQueries: true,
 	auth: undefined as unknown as AuthenticationState,
 	markOnlineOnConnect: true,
@@ -123,15 +128,17 @@ export type MediaType = keyof typeof MEDIA_HKDF_KEY_MAPPING
 export const MEDIA_KEYS = Object.keys(MEDIA_PATH_MAP) as MediaType[]
 
 export const MIN_PREKEY_COUNT = 5
+
 export const INITIAL_PREKEY_COUNT = 812
-export const UPLOAD_TIMEOUT = 30000
-export const MIN_UPLOAD_INTERVAL = 5000
+
+export const UPLOAD_TIMEOUT = 30000 // 30 seconds
+export const MIN_UPLOAD_INTERVAL = 5000 // 5 seconds minimum between uploads
 
 export const DEFAULT_CACHE_TTLS = {
-	SIGNAL_STORE: 5 * 60,
-	MSG_RETRY: 60 * 60,
-	CALL_OFFER: 5 * 60,
-	USER_DEVICES: 5 * 60
+	SIGNAL_STORE: 5 * 60, // 5 minutes
+	MSG_RETRY: 60 * 60, // 1 hour
+	CALL_OFFER: 5 * 60, // 5 minutes
+	USER_DEVICES: 5 * 60 // 5 minutes
 }
 
 export const TimeMs = {
