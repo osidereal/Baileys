@@ -18,9 +18,6 @@ import { delay, generateRegistrationId } from './generics'
 import type { ILogger } from './logger'
 import { PreKeyManager } from './pre-key-manager'
 
-/**
- * Transaction context stored in AsyncLocalStorage
- */
 interface TransactionContext {
 	cache: SignalDataSet
 	mutations: SignalDataSet
@@ -28,18 +25,12 @@ interface TransactionContext {
 	sessionId: string
 }
 
-// ========== MULTI SESSION SUPPORT ==========
-// Map sessionId -> cache store
+// Multi session storage
 const sessionCaches = new Map<string, CacheStore>()
-// Map sessionId -> key queues
 const sessionKeyQueues = new Map<string, Map<string, PQueue>>()
-// Map sessionId -> tx mutexes
 const sessionTxMutexes = new Map<string, Map<string, Mutex>>()
 const sessionTxMutexRefCounts = new Map<string, Map<string, number>>()
 
-/**
- * Gets or creates a cache store for a session
- */
 function getCacheForSession(sessionId: string, baseCache?: CacheStore): CacheStore {
 	if (sessionCaches.has(sessionId)) {
 		return sessionCaches.get(sessionId)!
@@ -48,14 +39,11 @@ function getCacheForSession(sessionId: string, baseCache?: CacheStore): CacheSto
 		stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE,
 		useClones: false,
 		deleteOnExpire: true
-	}) as unknown as CacheStore   // type cast karena NodeCache kompatibel tapi tipe tidak persis
+	}) as unknown as CacheStore
 	sessionCaches.set(sessionId, cache)
 	return cache
 }
 
-/**
- * Gets or creates a queue for a specific key type within a session
- */
 function getQueueForSession(sessionId: string, key: string): PQueue {
 	if (!sessionKeyQueues.has(sessionId)) {
 		sessionKeyQueues.set(sessionId, new Map())
@@ -67,9 +55,6 @@ function getQueueForSession(sessionId: string, key: string): PQueue {
 	return queues.get(key)!
 }
 
-/**
- * Gets or creates a transaction mutex for a session and key
- */
 function getTxMutexForSession(sessionId: string, key: string): Mutex {
 	if (!sessionTxMutexes.has(sessionId)) {
 		sessionTxMutexes.set(sessionId, new Map())
@@ -104,7 +89,6 @@ function releaseTxMutexRefForSession(sessionId: string, key: string): void {
 	} else {
 		refCounts.set(key, count)
 	}
-	// Cleanup session maps if no keys left
 	if (refCounts.size === 0) {
 		sessionTxMutexRefCounts.delete(sessionId)
 		sessionTxMutexes.delete(sessionId)
@@ -117,13 +101,6 @@ function releaseTxMutexRefForSession(sessionId: string, key: string): void {
 	}
 }
 
-/**
- * Adds caching capability to a SignalKeyStore with per-session isolation
- * @param store the store to add caching to
- * @param logger to log trace events
- * @param _cache cache store to use (optional)
- * @param sessionId unique identifier for this session (default: 'default')
- */
 export function makeCacheableSignalKeyStore(
 	store: SignalKeyStore,
 	logger?: ILogger,
@@ -133,7 +110,7 @@ export function makeCacheableSignalKeyStore(
 	const cache = getCacheForSession(sessionId, _cache)
 
 	function getUniqueId(type: string, id: string) {
-		return `${sessionId}.${type}.${id}` // prefix with sessionId
+		return `${sessionId}.${type}.${id}`
 	}
 
 	return {
@@ -182,14 +159,6 @@ export function makeCacheableSignalKeyStore(
 	}
 }
 
-/**
- * Adds DB-like transaction capability to the SignalKeyStore with per-session isolation
- * @param state the key store to apply this capability to
- * @param logger logger to log events
- * @param options transaction options
- * @param sessionId unique identifier for this session (default: 'default')
- * @returns SignalKeyStore with transaction capability
- */
 export const addTransactionCapability = (
 	state: SignalKeyStore,
 	logger: ILogger,
@@ -197,27 +166,18 @@ export const addTransactionCapability = (
 	sessionId: string = 'default'
 ): SignalKeyStoreWithTransaction => {
 	const txStorage = new AsyncLocalStorage<TransactionContext>()
-
 	const preKeyManager = new PreKeyManager(state, logger)
 
-	/**
-	 * Check if currently in a transaction
-	 */
 	function isInTransaction(): boolean {
 		return !!txStorage.getStore()
 	}
 
-	/**
-	 * Commit transaction with retries
-	 */
 	async function commitWithRetry(mutations: SignalDataSet): Promise<void> {
 		if (Object.keys(mutations).length === 0) {
 			logger.trace({ sessionId }, 'no mutations in transaction')
 			return
 		}
-
 		logger.trace({ sessionId, mutationCount: Object.keys(mutations).length }, 'committing transaction')
-
 		for (let attempt = 0; attempt < maxCommitRetries; attempt++) {
 			try {
 				await state.set(mutations)
@@ -226,11 +186,7 @@ export const addTransactionCapability = (
 			} catch (error) {
 				const retriesLeft = maxCommitRetries - attempt - 1
 				logger.warn({ sessionId, error, retriesLeft }, 'failed to commit mutations')
-
-				if (retriesLeft === 0) {
-					throw error
-				}
-
+				if (retriesLeft === 0) throw error
 				await delay(delayBetweenTriesMs)
 			}
 		}
@@ -239,55 +195,34 @@ export const addTransactionCapability = (
 	return {
 		get: async (type, ids) => {
 			const ctx = txStorage.getStore()
+			if (!ctx) return state.get(type, ids)
 
-			if (!ctx) {
-				// No transaction - direct read without exclusive lock for concurrency
-				return state.get(type, ids)
-			}
-
-			// In transaction - check cache first
 			const cached = ctx.cache[type] || {}
 			const missing = ids.filter(id => !(id in cached))
-
 			if (missing.length > 0) {
 				ctx.dbQueries++
 				logger.trace({ sessionId, type, count: missing.length }, 'fetching missing keys in transaction')
-
 				const fetched = await getTxMutexForSession(sessionId, type).runExclusive(() => state.get(type, missing))
-
-				// Update cache
 				ctx.cache[type] = ctx.cache[type] || ({} as any)
 				Object.assign(ctx.cache[type]!, fetched)
 			}
-
-			// Return requested ids from cache
 			const result: { [key: string]: any } = {}
 			for (const id of ids) {
 				const value = ctx.cache[type]?.[id]
-				if (value !== undefined && value !== null) {
-					result[id] = value
-				}
+				if (value !== undefined && value !== null) result[id] = value
 			}
-
 			return result
 		},
-
 		set: async data => {
 			const ctx = txStorage.getStore()
-
 			if (!ctx) {
-				// No transaction - direct write with queue protection
 				const types = Object.keys(data)
-
-				// Process pre-keys with validation
 				for (const type_ of types) {
 					const type = type_ as keyof SignalDataTypeMap
 					if (type === 'pre-key') {
 						await preKeyManager.validateDeletions(data, type)
 					}
 				}
-
-				// Write all data in parallel
 				await Promise.all(
 					types.map(type =>
 						getQueueForSession(sessionId, type).add(async () => {
@@ -298,62 +233,36 @@ export const addTransactionCapability = (
 				)
 				return
 			}
-
-			// In transaction - update cache and mutations
 			logger.trace({ sessionId, types: Object.keys(data) }, 'caching in transaction')
-
 			for (const key_ in data) {
 				const key = key_ as keyof SignalDataTypeMap
-
-				// Ensure structures exist
 				ctx.cache[key] = ctx.cache[key] || ({} as any)
 				ctx.mutations[key] = ctx.mutations[key] || ({} as any)
-
-				// Special handling for pre-keys
 				if (key === 'pre-key') {
 					await preKeyManager.processOperations(data, key, ctx.cache, ctx.mutations, true)
 				} else {
-					// Normal key types
 					Object.assign(ctx.cache[key]!, data[key])
 					Object.assign(ctx.mutations[key]!, data[key])
 				}
 			}
 		},
-
 		isInTransaction,
-
 		transaction: async (work, key) => {
 			const existing = txStorage.getStore()
-
-			// Nested transaction - reuse existing context
 			if (existing) {
 				logger.trace({ sessionId }, 'reusing existing transaction context')
 				return work()
 			}
-
-			// New transaction - acquire mutex and create context
 			const mutex = getTxMutexForSession(sessionId, key)
 			acquireTxMutexRefForSession(sessionId, key)
-
 			try {
 				return await mutex.runExclusive(async () => {
-					const ctx: TransactionContext = {
-						cache: {},
-						mutations: {},
-						dbQueries: 0,
-						sessionId
-					}
-
+					const ctx: TransactionContext = { cache: {}, mutations: {}, dbQueries: 0, sessionId }
 					logger.trace({ sessionId }, 'entering transaction')
-
 					try {
 						const result = await txStorage.run(ctx, work)
-
-						// Commit mutations
 						await commitWithRetry(ctx.mutations)
-
 						logger.trace({ sessionId, dbQueries: ctx.dbQueries }, 'transaction completed')
-
 						return result
 					} catch (error) {
 						logger.error({ sessionId, error }, 'transaction failed, rolling back')
@@ -389,4 +298,4 @@ export const initAuthCreds = (): AuthenticationCreds => {
 		routingInfo: undefined,
 		additionalData: undefined
 	}
-}
+		}
