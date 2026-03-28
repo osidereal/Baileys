@@ -21,7 +21,6 @@ export const WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX = Buffer.from([6, 5])
 export const WA_ADV_HOSTED_DEVICE_SIG_PREFIX = Buffer.from([6, 6])
 
 export const WA_DEFAULT_EPHEMERAL = 7 * 24 * 60 * 60
-
 export const STATUS_EXPIRY_SECONDS = 24 * 60 * 60
 export const PLACEHOLDER_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 
@@ -51,14 +50,14 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	version: version as WAVersion,
 	browser: Browsers.macOS('Chrome'),
 	waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
-	connectTimeoutMs: 60_000,               // <-- diperbesar dari 20_000
+	connectTimeoutMs: 60_000,
 	keepAliveIntervalMs: 30_000,
 	logger: logger.child({ class: 'baileys' }),
 	emitOwnEvents: true,
-	defaultQueryTimeoutMs: 120_000,         // <-- diperbesar dari 60_000
+	defaultQueryTimeoutMs: 120_000,
 	customUploadHosts: [],
-	retryRequestDelayMs: 100,               // <-- lebih agresif (dari 250)
-	maxMsgRetryCount: 15,                   // <-- lebih banyak (dari 5)
+	retryRequestDelayMs: 100,
+	maxMsgRetryCount: 15,
 	fireInitQueries: true,
 	auth: undefined as unknown as AuthenticationState,
 	markOnlineOnConnect: true,
@@ -84,7 +83,6 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	makeSignalRepository: makeLibSignalRepository
 }
 
-// ===== JANGAN HAPUS BAGIAN INI =====
 export const MEDIA_PATH_MAP: { [T in MediaType]?: string } = {
 	image: '/mms/image',
 	video: '/mms/video',
